@@ -5,3 +5,683 @@ git commit -m "first commit"
 git branch -M main
 git remote add origin https://github.com/rajubohora78-bot/cursor.git
 git push -u origin main
+
+
+I want to create a note book which exactly looks line something written in hand written in hardcopy. and I have python code which is perfect with Jason file but it is little bit hard for me to write json file-print-check, so I want to create editor with same function -   the function I want in html with css and java or any other library which is free are given below
+
+- create a4 page 
+- calculate and convert to mm to make easier to understand
+- red margin form left 10 mm like hard copy 
+- form top first blue line is in 20mm below and onward second third line is 8mm below,
+- 20mm is place of header and the px written is 32 auto 
+- from first line wirte below 27.5 mm form the upper top (7.5mm for the first blue line ) to make like written in hard copy 
+- for writing text follow above and write constantly above 0.5mm form blue ine no matter how much the text size - 
+
+- can write before and after red line 
+- text wrapping to write all in page like ms word 
+- make two options one to write before red line - if written after blue line after text wrapping it sticks instructons and after blue line 
+- --  this is the coincept of page generator and for each and every page use this concept - auto generate the page and start writing in line - only write in header like make options outside the page to write in header 
+
+
+---  I want to add equations there images there which can be resized and move any where insode the page - and make table of difference between - make options to create the table   ------     another option add is that we can write json file for difference between and it write automatically and save in hig quality odf ----------   the code of pyhon is given below from wherer yoy need to collect ideas--   plese stick in plan ---   do best as you can with small detai;   ------------# This script generates a notebook-style PDF using local images only.
+# It is intended to be run directly on your computer, not within this environment.
+
+from PIL import Image, ImageDraw, ImageFont
+import os
+import platform
+from typing import List, Dict, Any
+import matplotlib.pyplot as plt
+import io
+import re
+import textwrap
+import json
+import sys
+
+# ---------------------- Configuration ----------------------
+DPI = 300
+PAGE_W_MM = 210
+PAGE_H_MM = 297
+TOP_MARGIN_MM = 20
+LEFT_MARGIN_MM = 20
+RIGHT_MARGIN_MM = 10
+LINE_SPACING_MM = 7
+
+# Try to find a system font. Update these paths if the font is not found.
+FONT_PATHS_TO_TRY = [
+    os.path.join(os.path.expanduser('~'), "Downloads/Libre_Baskerville,Patrick_Hand/Patrick_Hand/PatrickHand-Regular.ttf"),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+]
+FALLBACK_FONT = None
+
+OUTPUT_PDF = "a4_notebook_with_local_images.pdf"
+INPUT_JSON_FILE = "" # This will now be populated by user input
+
+# ---------------------- Centralized Inputs ----------------------
+# This dictionary will be populated from the JSON file.
+INPUTS: Dict[str, Any] = {}
+
+# ---------------------- Utilities ----------------------
+def mm_to_px(mm: float, dpi: int = DPI) -> int:
+    """Converts a value from millimeters to pixels."""
+    return int(round(mm * dpi / 25.4))
+
+def load_font(font_path: str = None, size_px: int = 20):
+    """
+    Loads a font from a list of predefined paths.
+    If no font is found, it falls back to the default PIL font.
+    """
+    global FALLBACK_FONT
+    if font_path and os.path.isfile(font_path):
+        try:
+            return ImageFont.truetype(font_path, size_px)
+        except IOError:
+            pass # Fall through to the next check
+    for p in FONT_PATHS_TO_TRY:
+        if os.path.isfile(p):
+            try:
+                return ImageFont.truetype(p, size_px)
+            except IOError:
+                continue
+    if FALLBACK_FONT is None:
+        FALLBACK_FONT = ImageFont.load_default()
+    return FALLBACK_FONT
+
+def render_equation(latex_expr: str, dpi: int = DPI) -> Image.Image:
+    """Renders a LaTeX equation as a transparent PNG image using matplotlib."""
+    fig, ax = plt.subplots(figsize=(0.01, 0.01))
+    ax.axis("off")
+    ax.text(0, 0, f"${latex_expr}$", fontsize=20, color='black')
+    buf = io.BytesIO()
+    fig.savefig(buf, format='PNG', dpi=dpi, bbox_inches='tight', pad_inches=0.1, transparent=True)
+    plt.close(fig)
+    buf.seek(0)
+    return Image.open(buf)
+
+# ---------------------- Notebook Page Generator ----------------------
+class NotebookPageGenerator:
+    """
+    A class to generate pages for a notebook-style PDF document.
+    """
+    def __init__(self, dpi=DPI, page_w_mm=PAGE_W_MM, page_h_mm=PAGE_H_MM,
+                 top_margin_mm=TOP_MARGIN_MM, left_margin_mm=LEFT_MARGIN_MM,
+                 right_margin_mm=RIGHT_MARGIN_MM, line_spacing_mm=LINE_SPACING_MM,
+                 font_path=None):
+        self.dpi = dpi
+        self.page_w_px = mm_to_px(page_w_mm, dpi)
+        self.page_h_px = mm_to_px(page_h_mm, dpi)
+        self.top_margin_px = mm_to_px(top_margin_mm, dpi)
+        self.left_margin_px = mm_to_px(left_margin_mm, dpi)
+        self.right_margin_px = mm_to_px(right_margin_mm, dpi)
+        self.line_spacing_px = mm_to_px(line_spacing_mm, dpi)
+        self.font_path = font_path
+
+        # Body font
+        self.font_px = max(12, int(self.line_spacing_px * 0.6))
+        self.font = load_font(font_path, self.font_px)
+        # Superscript/subscript font (smaller)
+        self.sup_sub_font_px = int(self.font_px * 0.7)
+        self.sup_sub_font = load_font(font_path, self.sup_sub_font_px)
+        self.sup_sub_y_offset = int(self.font_px * 0.3)
+
+        # Heading font (larger)
+        self.heading_font_px = int(self.font_px * 1.6)
+        self.heading_font = load_font(font_path, self.heading_font_px)
+
+        self.pages: List[Image.Image] = []
+        self.current_draw = None
+        self.current_image = None
+        self.blue_lines = []
+        self.next_blue_idx = 0
+        
+        # New properties for image and text wrapping
+        self.text_area_width = self.page_w_px - (self.left_margin_px + self.right_margin_px)
+        self.text_area_start_x = self.left_margin_px
+        self.two_column_end_y = 0
+        self.is_two_column_mode = False
+
+        self.create_new_page()
+
+    def create_new_page(self):
+        """Creates a new blank page with blue lines and a red margin."""
+        img = Image.new("RGB", (self.page_w_px, self.page_h_px), "white")
+        draw = ImageDraw.Draw(img)
+        self.blue_lines = []
+        y = self.top_margin_px
+        while y <= self.page_h_px - 1:
+            draw.line([(0, y), (self.page_w_px, y)], fill=(170, 200, 255), width=2)
+            self.blue_lines.append(y)
+            y += self.line_spacing_px
+        draw.line([(self.left_margin_px, 0), (self.left_margin_px, self.page_h_px)], fill=(220, 80, 80), width=3)
+        self.pages.append(img)
+        self.current_image = img
+        self.current_draw = draw
+        self.next_blue_idx = 1
+        return img, draw
+
+    def _get_next_line_position(self, current_page_only=False):
+      
+        if self.next_blue_idx >= len(self.blue_lines):
+            if current_page_only:
+                return None
+            self.create_new_page()
+            
+        # Reset to full width if the current text line is past the two-column image
+        y_text = self.blue_lines[self.next_blue_idx]
+        if self.is_two_column_mode and y_text > self.two_column_end_y:
+            self.is_two_column_mode = False
+            self.text_area_width = self.page_w_px - (self.left_margin_px + self.right_margin_px)
+            self.text_area_start_x = self.left_margin_px
+            
+        y_top = self.blue_lines[self.next_blue_idx]
+        y_text = int(y_top - (self.line_spacing_px * 0.8))
+        return (self.text_area_start_x + mm_to_px(3, self.dpi), y_text)
+
+    def _measure_text_width(self, text: str, font=None) -> int:
+        """Measures the width of a given text string in pixels."""
+        if self.current_draw is None:
+            return 0
+        font = font or self.font
+        try:
+            # Use textbbox for more accurate measurements
+            bbox = self.current_draw.textbbox((0, 0), text, font=font)
+            return bbox[2] - bbox[0]
+        except AttributeError:
+            # Fallback for older Pillow versions
+            return self.current_draw.textsize(text, font=font)[0]
+
+    def _wrap_text_to_width(self, text: str, available_px: int, font=None) -> List[str]:
+        """Wraps text into a list of strings that fit a given pixel width."""
+        font = font or self.font
+        lines = []
+        words = text.split()
+        if not words:
+            return [""]
+        current = words[0]
+        for w in words[1:]:
+            trial = current + " " + w
+            if self._measure_text_width(trial, font) <= available_px:
+                current = trial
+            else:
+                lines.append(current)
+                current = w
+        lines.append(current)
+        return lines
+    
+    def _draw_text_part(self, text_part: str, x_start: int, y_start: int, available_width: int):
+        """
+        Draws a text part, handling subscripts and superscripts.
+        Returns the new x position after drawing the text.
+        """
+        current_x = x_start
+        current_y = y_start
+        
+        # Regex to find `_(...)` or `^(...)`
+        regex_pattern = re.compile(r'(\^|\_)\(([^)]*)\)')
+        parts = []
+        last_end = 0
+        for match in regex_pattern.finditer(text_part):
+            # Add plain text before the match
+            if match.start() > last_end:
+                parts.append({'type': 'normal', 'text': text_part[last_end:match.start()]})
+            # Add the special part
+            op = match.group(1)
+            content = match.group(2)
+            parts.append({'type': 'script', 'op': op, 'text': content})
+            last_end = match.end()
+        # Add any remaining plain text
+        if last_end < len(text_part):
+            parts.append({'type': 'normal', 'text': text_part[last_end:]})
+
+        for part in parts:
+            if part['type'] == 'normal':
+                self.current_draw.text((current_x, current_y), part['text'], font=self.font, fill=(0, 0, 0))
+                current_x += self._measure_text_width(part['text'], self.font)
+            
+            elif part['type'] == 'script':
+                script_width = self._measure_text_width(part['text'], self.sup_sub_font)
+                y_offset = 0
+                if part['op'] == '^':
+                    y_offset = -self.sup_sub_y_offset
+                elif part['op'] == '_':
+                    y_offset = self.sup_sub_y_offset
+                
+                self.current_draw.text((current_x, current_y + y_offset), part['text'], font=self.sup_sub_font, fill=(0, 0, 0))
+                current_x += script_width
+        
+        return current_x
+
+    # ---------------- Add content methods ----------------
+    def add_heading(self, heading_text: str, skip_line=False):
+        """Adds a centered heading to the page."""
+        heading_w = self._measure_text_width(heading_text, font=self.heading_font)
+        x = int((self.page_w_px - heading_w) / 2)
+        y = max(5, int(self.top_margin_px / 2) - int(self.heading_font_px / 2))
+        self.current_draw.text((x, y), heading_text, font=self.heading_font, fill=(0, 0, 0))
+        self.next_blue_idx = 1
+        if skip_line:
+            self.next_blue_idx += 1
+
+    def add_paragraph(self, text: str, skip_line=False):
+        """Adds a new paragraph with automatic line wrapping."""
+        wrapped_lines = self._wrap_text_to_width(text, self.text_area_width, self.font)
+        for line in wrapped_lines:
+            pos = self._get_next_line_position()
+            if pos is None: return
+            x, y = pos
+            self.current_draw.text((x, y), line, font=self.font, fill=(0, 0, 0))
+            self.next_blue_idx += 1
+        if skip_line:
+            self.next_blue_idx += 1
+
+    def add_question_answer(self, question: str, answer: str, q_number: int = None, skip_line=False):
+        """Adds a question and answer pair with formatting and line wrapping."""
+        margin_label_x = self.left_margin_px - mm_to_px(8, self.dpi)
+        text_indent_px = mm_to_px(3, self.dpi)
+        available_px = self.text_area_width - text_indent_px
+
+        # Question number
+        if q_number is not None:
+            pos = self._get_next_line_position()
+            if pos is None: return
+            _, y = pos
+            self.current_draw.text((margin_label_x, y), f"{q_number}.", font=self.font, fill=(0, 0, 0))
+            q_lines = self._wrap_text_to_width(question, available_px)
+            for i, ln in enumerate(q_lines):
+                x_pos = self.left_margin_px + text_indent_px
+                y_pos = y if i == 0 else self._get_next_line_position()[1]
+                self.current_draw.text((x_pos, y_pos), ln, font=self.font, fill=(0, 0, 0))
+                self.next_blue_idx += 1
+
+        # Answer label
+        pos = self._get_next_line_position()
+        if pos is None: return
+        _, y = pos
+        self.current_draw.text((margin_label_x, y), "Ans", font=self.font, fill=(0, 0, 0))
+
+        # Answer text
+        self.add_paragraph(answer)
+
+        if skip_line:
+            self.next_blue_idx += 1
+
+    def add_image(self, path: str = None, alignment: str = "center", size: str = "small", caption: str = None):
+        """Loads, resizes, and adds a local image with optional caption."""
+        img = None
+        try:
+            if not path or not os.path.exists(path):
+                print(f"Error: Image path not found at {path}")
+                return
+            img = Image.open(path)
+        except Exception as e:
+            print(f"Error loading image from path ({path}): {e}")
+            return
+        
+        pos = self._get_next_line_position(current_page_only=True)
+        if pos is None:
+            self.create_new_page()
+            pos = self._get_next_line_position()
+        x, y = pos
+        
+        # --- RESIZING LOGIC (UPDATED) ---
+        new_w, new_h = img.size
+        
+        if alignment == "center":
+            if size == "small":
+                max_w_px = mm_to_px(60, self.dpi)
+                max_h_px = mm_to_px(60, self.dpi)
+            elif size == "big":
+                max_w_px = mm_to_px(120, self.dpi)
+                max_h_px = mm_to_px(120, self.dpi)
+            
+            width_scale = max_w_px / img.width
+            height_scale = max_h_px / img.height
+            scale_factor = min(width_scale, height_scale)
+            
+            new_w = int(img.width * scale_factor)
+            new_h = int(img.height * scale_factor)
+            
+        elif alignment == "left":
+            max_w_px = mm_to_px(30, self.dpi)
+            max_h_px = mm_to_px(20, self.dpi)
+            
+            width_scale = max_w_px / img.width
+            height_scale = max_h_px / img.height
+            scale_factor = min(width_scale, height_scale)
+
+            new_w = int(img.width * scale_factor)
+            new_h = int(img.height * scale_factor)
+
+        elif alignment == "right":
+            max_w_px = mm_to_px(60, self.dpi)
+            max_h_px = mm_to_px(60, self.dpi)
+            
+            width_scale = max_w_px / img.width
+            height_scale = max_h_px / img.height
+            scale_factor = min(width_scale, height_scale)
+
+            new_w = int(img.width * scale_factor)
+            new_h = int(img.height * scale_factor)
+            
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        
+        # --- ALIGNMENT LOGIC (UPDATED) ---
+        if alignment == "center":
+            x_pos = (self.page_w_px - new_w) // 2
+            y_pos = y
+            self.current_image.paste(img, (x_pos, y_pos))
+            
+            self.next_blue_idx += int(new_h / self.line_spacing_px) + 2
+            
+            if caption:
+                self.add_paragraph(caption)
+                self.next_blue_idx += 1
+        
+        elif alignment == "left":
+            left_offset_px = mm_to_px(5, self.dpi)
+            x_pos = self.left_margin_px + left_offset_px
+            y_pos = y
+            self.current_image.paste(img, (x_pos, y_pos))
+
+            self.is_two_column_mode = True
+            self.two_column_end_y = y_pos + new_h
+            self.text_area_width = self.page_w_px - (self.left_margin_px + left_offset_px + new_w + mm_to_px(5, self.dpi))
+            self.text_area_start_x = self.left_margin_px + left_offset_px + new_w + mm_to_px(5, self.dpi)
+            
+            if caption:
+                self.add_paragraph(caption)
+                self.next_blue_idx += 1
+
+        elif alignment == "right":
+            x_pos = self.page_w_px - self.right_margin_px - new_w
+            y_pos = y
+            self.current_image.paste(img, (x_pos, y_pos))
+            
+            self.is_two_column_mode = True
+            self.two_column_end_y = y_pos + new_h
+            self.text_area_width = self.page_w_px - self.left_margin_px - new_w - mm_to_px(5, self.dpi)
+            self.text_area_start_x = self.left_margin_px
+            
+            if caption:
+                self.add_paragraph(caption)
+                self.next_blue_idx += 1
+    def add_difference_table(self, title: str, columns: List[Dict[str, Any]], skip_line=False):
+       
+        # Add the title of the table
+        self.add_paragraph(title)
+
+        # Check for sufficient space for the table header (headings + 2 lines)
+        lines_needed = 3
+        if self.next_blue_idx + lines_needed > len(self.blue_lines):
+            self.create_new_page()
+
+        # Calculate table dimensions, aligning to the left margin with a 1mm offset
+        table_start_x = self.left_margin_px + mm_to_px(1, self.dpi)
+        table_width = self.page_w_px - table_start_x - self.right_margin_px
+        table_end_x = table_start_x + table_width
+        column_spacing_px = mm_to_px(5, self.dpi)
+        col_w_px = (table_width - column_spacing_px) / 2
+        text_padding_px = mm_to_px(2, self.dpi)
+        
+        # Store initial y positions for drawing the vertical lines
+        initial_y_for_vertical_lines = self.blue_lines[self.next_blue_idx]
+        separator_x = table_start_x + col_w_px + column_spacing_px / 2
+
+        # Draw the top horizontal line for the header
+        self.current_draw.line([(table_start_x, initial_y_for_vertical_lines), (table_end_x, initial_y_for_vertical_lines)], fill=(150, 150, 150), width=2)
+
+        # Add headings
+        y_heading = self.blue_lines[self.next_blue_idx + 1]
+        y_heading = self.blue_lines[self.next_blue_idx + 1]
+        x_left_heading_text = table_start_x + (col_w_px - self._measure_text_width(columns[0]["heading"], self.font)) / 2
+        x_right_heading_text = table_start_x + col_w_px + column_spacing_px + (col_w_px - self._measure_text_width(columns[1]["heading"], self.font)) / 2
+        self.current_draw.text((x_left_heading_text, y_heading), columns[0]["heading"], font=self.font, fill=(0, 0, 0))
+        self.current_draw.text((x_right_heading_text, y_heading), columns[1]["heading"], font=self.font, fill=(0, 0, 0))
+
+        # Draw the line under the headings
+        line_under_headings_y = self.blue_lines[self.next_blue_idx + 2]
+        self.current_draw.line([(table_start_x, line_under_headings_y), (table_end_x, line_under_headings_y)], fill=(150, 150, 150), width=2)
+        
+        # Move the index to the first line of content
+        self.next_blue_idx += 3
+        
+        # Draw the content points, handling page breaks
+        for i in range(max(len(columns[0]["points"]), len(columns[1]["points"]))):
+            left_point = columns[0]["points"][i] if i < len(columns[0]["points"]) else ""
+            right_point = columns[1]["points"][i] if i < len(columns[1]["points"]) else ""
+
+            left_lines = self._wrap_text_to_width(left_point, col_w_px - 2 * text_padding_px, self.font)
+            right_lines = self._wrap_text_to_width(right_point, col_w_px - 2 * text_padding_px, self.font)
+            max_lines = max(len(left_lines), len(right_lines))
+             # Check for page breaks before drawing a new point
+            if self.next_blue_idx + max_lines >= len(self.blue_lines):
+                # Draw vertical lines to the bottom of the current page's content area
+                current_page_bottom_y = self.blue_lines[-1]
+                self.current_draw.line([(separator_x, initial_y_for_vertical_lines), (separator_x, current_page_bottom_y)], fill=(150, 150, 150), width=2)
+                self.current_draw.line([(table_start_x, initial_y_for_vertical_lines), (table_start_x, current_page_bottom_y)], fill=(150, 150, 150), width=2)
+                self.current_draw.line([(table_end_x, initial_y_for_vertical_lines), (table_end_x, current_page_bottom_y)], fill=(150, 150, 150), width=2)
+
+                self.create_new_page()
+                # Set the new start y for vertical lines on this page
+                initial_y_for_vertical_lines = self.blue_lines[1]
+        
+            # Draw the lines for both columns
+            for j in range(max_lines):
+                y_pos = self.blue_lines[self.next_blue_idx]
+                if j < len(left_lines):
+                    self.current_draw.text((table_start_x + text_padding_px, y_pos), left_lines[j], font=self.font, fill=(0, 0, 0))
+                if j < len(right_lines):
+                    self.current_draw.text((table_start_x + col_w_px + column_spacing_px + text_padding_px, y_pos), right_lines[j], font=self.font, fill=(0, 0, 0))
+                self.next_blue_idx += 1
+            
+            # Add a small line break after each point
+            self.next_blue_idx += 1
+
+        # Draw the table's bottom and final vertical lines
+        table_bottom_y = self.blue_lines[self.next_blue_idx - 1]
+        self.current_draw.line([(table_start_x, table_bottom_y), (table_end_x, table_bottom_y)], fill=(150, 150, 150), width=2)
+        self.current_draw.line([(separator_x, initial_y_for_vertical_lines), (separator_x, table_bottom_y)], fill=(150, 150, 150), width=2)
+        self.current_draw.line([(table_start_x, initial_y_for_vertical_lines), (table_start_x, table_bottom_y)], fill=(150, 150, 150), width=2)
+        self.current_draw.line([(table_end_x, initial_y_for_vertical_lines), (table_end_x, table_bottom_y)], fill=(150, 150, 150), width=2)
+
+        if skip_line:
+            self.next_blue_idx += 1
+
+        
+        
+            
+    def add_equation(self, latex_expr: str, skip_line=True, note: str = None, offset_mm: float = 3):
+        """Adds a LaTeX equation rendered as an image."""
+        eq_img = render_equation(latex_expr, dpi=self.dpi)
+        line_h = self.line_spacing_px
+        w_percent = line_h / eq_img.height
+        new_w = int(eq_img.width * w_percent)
+        eq_img = eq_img.resize((new_w, line_h), Image.LANCZOS)
+
+        pos = self._get_next_line_position()
+        if pos is None: return
+        x, y = pos
+        offset_px = mm_to_px(offset_mm, self.dpi)
+        y_with_offset = y + offset_px
+        self.current_image.paste(eq_img, (x, y_with_offset - eq_img.height // 2), eq_img.convert("RGBA"))
+
+        if note:
+            self.next_blue_idx += 1
+            pos_note = self._get_next_line_position()
+            if pos_note is None: return
+            x_note, y_note = pos_note
+            self.current_draw.text((x_note, y_note), note, font=self.font, fill=(0, 0, 0))
+
+        if skip_line:
+            self.next_blue_idx += 2
+    
+    def add_concepts_list(self, concepts: List[Dict[str, str]], skip_line=False):
+        """
+        Adds a list of concepts with terms and definitions.
+        """
+        term_indent_px = mm_to_px(3, self.dpi)
+        available_px = self.text_area_width - term_indent_px
+        
+        for concept in concepts:
+            # Term
+            pos = self._get_next_line_position()
+            if pos is None: return
+            x, y = pos
+            term_text = f"• {concept['term']}"
+            term_lines = self._wrap_text_to_width(term_text, available_px, self.font)
+            for line in term_lines:
+                pos = self._get_next_line_position()
+                if pos is None: return
+                x, y = pos
+                self.current_draw.text((x, y), line, font=self.font, fill=(0, 0, 0))
+                self.next_blue_idx += 1
+
+            # Definition
+            definition_text = concept['definition']
+            definition_lines = self._wrap_text_to_width(definition_text, available_px, self.font)
+            for line in definition_lines:
+                pos = self._get_next_line_position()
+                if pos is None: return
+                x, y = pos
+                self.current_draw.text((x, y), line, font=self.font, fill=(0, 0, 0))
+                self.next_blue_idx += 1
+
+            if skip_line:
+                self.next_blue_idx += 1
+    
+    def add_inline_text_and_equation(self, content_parts: List[Dict[str, str]]):
+       
+        available_px = self.text_area_width
+        
+        pos = self._get_next_line_position()
+        if pos is None: return
+        current_x, current_y = pos
+
+        # Create a single string with placeholders for equations
+        full_text = ""
+        latex_map = {}
+        for i, part in enumerate(content_parts):
+            if "text" in part:
+                full_text += part["text"]
+            elif "latex" in part:
+                placeholder = f"__LATEX_{i}__"
+                full_text += placeholder
+                latex_map[placeholder] = part["latex"]
+
+        # Word wrap the full text with placeholders
+        wrapped_lines = self._wrap_text_to_width(full_text, available_px)
+
+        for line in wrapped_lines:
+            pos = self._get_next_line_position()
+            if pos is None: return
+            current_x, current_y = pos
+
+            line_parts = re.split(r'(__LATEX_\d+__)', line)
+            
+            for part in line_parts:
+                if part in latex_map:
+                    # It's a LaTeX equation
+                    eq_img = render_equation(latex_map[part], dpi=self.dpi)
+                    line_h = self.line_spacing_px
+                    w_percent = line_h / eq_img.height
+                    new_w = int(eq_img.width * w_percent)
+                    eq_img = eq_img.resize((new_w, line_h), Image.LANCZOS)
+                    
+                    y_with_offset = current_y + self.line_spacing_px - eq_img.height
+                    self.current_image.paste(eq_img, (current_x, y_with_offset), eq_img.convert("RGBA"))
+                    current_x += new_w + mm_to_px(2, self.dpi)
+                else:
+                    # It's plain text (with potential custom formatting)
+                    current_x = self._draw_text_part(part.strip(), current_x, current_y, available_px)
+
+            self.next_blue_idx += 1
+    
+    def save_pdf(self, output_path: str = OUTPUT_PDF):
+        """Saves all generated pages as a single PDF and attempts to open it."""
+        if not self.pages:
+            raise RuntimeError("No pages to save")
+        first, rest = self.pages[0], self.pages[1:]
+        first.save(output_path, save_all=True, append_images=rest)
+        print(f"Saved notebook to {output_path}")
+        self.open_pdf(output_path)
+
+    def open_pdf(self, path: str):
+        """
+        Attempts to open the generated PDF with the system's default viewer.
+        """
+        try:
+            if platform.system() == "Windows":
+                os.startfile(path)
+            elif platform.system() == "Darwin":
+                os.system(f"open '{path}'")
+            else:
+                os.system(f"xdg-open '{path}'")
+        except Exception as e:
+            print(f"Cannot open PDF automatically: {e}")
+
+# ---------------------- Main Execution ----------------------
+# ---------------------- Main Execution ----------------------
+if __name__ == "__main__":
+    while True:
+        INPUT_FILE = input("Please enter the name of the JSON/txt file (e.g., input.json or data.txt): ")
+        if not (INPUT_FILE.endswith(".json") or INPUT_FILE.endswith(".txt")):
+            print("Invalid file name. Please enter a filename ending with '.json' or '.txt'.")
+            continue
+
+        try:
+            # Clean file: remove lines that start with '#' or strip inline comments
+            cleaned_lines = []
+            with open(INPUT_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    # Remove everything after '#' (inline comments)
+                    if "#" in line:
+                        line = line.split("#", 1)[0]
+                    if line.strip():  # keep non-empty lines
+                        cleaned_lines.append(line)
+
+            cleaned_text = "\n".join(cleaned_lines)
+
+            # Parse cleaned text as JSON
+            INPUTS = json.loads(cleaned_text)
+            break  # Exit loop if parsing is successful
+
+        except FileNotFoundError:
+            print(f"Error: The file '{INPUT_FILE}' was not found. Please check the file name and try again.")
+        except json.JSONDecodeError as e:
+            print(f"Error: The file '{INPUT_FILE}' contains invalid JSON. Details: {e}")
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+
+
+    gen = NotebookPageGenerator(font_path=None)
+
+    
+    # Process content in the exact order of the INPUTS dictionary keys
+    for key, content_list in INPUTS.items():
+        if key == "heading":
+            gen.add_heading(content_list, skip_line=True)
+        elif key == "questions":
+            for i, qa in enumerate(content_list, start=1):
+                gen.add_question_answer(qa["question"], qa["answer"], q_number=i, skip_line=qa.get("skip_line", False))
+        elif key == "images":
+            for img_data in content_list:
+                gen.add_image(path=img_data.get("path"), alignment=img_data["alignment"], size=img_data.get("size", "small"), caption=img_data.get("caption"))
+        elif key == "paragraphs":
+            for p in content_list:
+                gen.add_paragraph(p["text"], skip_line=p.get("skip_line", False))
+        elif key == "equations":
+            for eq in content_list:
+                gen.add_equation(eq["latex"], note=eq.get("note"), skip_line=eq.get("skip_line", True))
+        elif key == "concepts":
+            gen.add_concepts_list(content_list, skip_line=True)
+        elif key == "inline_content":
+            for content in content_list:
+                gen.add_inline_text_and_equation(content["parts"])
+        elif key == "difference_tables":
+            for table_data in content_list:
+                gen.add_difference_table(table_data["title"], table_data["columns"], skip_line=True)
+
+        
+    gen.save_pdf()
+    
